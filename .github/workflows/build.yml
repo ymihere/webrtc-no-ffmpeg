@@ -1,0 +1,114 @@
+name: Build
+
+# Started by hand only, so nobody outside can start a build with a pull request.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUST_SDKS_COMMIT: 524123ee0069e8c01342c90978ad0dd5e4c58275 # LiveKit's tag webrtc-a545de4
+  WEBRTC_COMMIT: a545de45259b47dfac5f3635863e47cb601f1bb2
+  RELEASE: webrtc-a545de4-no-ffmpeg
+
+jobs:
+  build:
+    name: ${{ matrix.system }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { system: linux, arch: x64, runner: ubuntu-24.04, command: ./build_linux.sh }
+          - { system: win, arch: x64, runner: windows-2022, command: .\build_windows.cmd }
+          - { system: mac, arch: arm64, runner: macos-15, command: ./build_macos.sh }
+          - { system: mac, arch: x64, runner: macos-15, command: ./build_macos.sh }
+    env:
+      NAME: ${{ matrix.system }}-${{ matrix.arch }}-release
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: livekit/rust-sdks
+          ref: ${{ env.RUST_SDKS_COMMIT }}
+          path: rust-sdks
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+
+      - name: Tools (Linux)
+        if: matrix.system == 'linux'
+        run: |
+          pip3 install setuptools
+          sudo apt update -y
+          sudo apt install -y ninja-build pkg-config openjdk-11-jdk
+      - name: Free disk space (Linux)
+        if: matrix.system == 'linux'
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          android: false
+          tool-cache: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Tools (Mac)
+        if: matrix.system == 'mac'
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_26.0.app/Contents/Developer
+          brew install ninja
+      - name: Tools (Windows)
+        if: matrix.system == 'win'
+        run: |
+          pip3 install setuptools
+          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip" -OutFile ninja.zip
+          if ((Get-FileHash ninja.zip -Algorithm SHA256).Hash -ne "07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65") { throw "ninja.zip is not the file expected" }
+          Expand-Archive -Path ninja.zip -DestinationPath "$env:GITHUB_WORKSPACE\ninja"
+          echo "$env:GITHUB_WORKSPACE\ninja" | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_PATH
+
+      - name: Remove H.264 and ffmpeg from the recipe
+        shell: bash
+        run: python3 scripts/prepare.py rust-sdks/webrtc-sys/libwebrtc ${{ matrix.system }} "$WEBRTC_COMMIT"
+      - name: Build
+        working-directory: rust-sdks/webrtc-sys/libwebrtc
+        run: ${{ matrix.command }} --arch ${{ matrix.arch }} --profile release
+      - name: Check and zip
+        shell: bash
+        run: python3 scripts/pack.py rust-sdks/webrtc-sys/libwebrtc "$NAME" "webrtc-$NAME.zip"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ env.NAME }}
+          path: webrtc-${{ env.NAME }}.zip
+          retention-days: 7
+          compression-level: 0
+
+  publish:
+    name: Draft release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          merge-multiple: true
+          path: files
+      - name: Hashes
+        working-directory: files
+        run: sha256sum webrtc-*.zip | tee SHA256SUMS
+      - name: Proof of where the files were built
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: files/SHA256SUMS
+      - name: Draft release, published by hand after a look
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: |
+            Built from LiveKit's rust-sdks at ${{ env.RUST_SDKS_COMMIT }} and webrtc-sdk/webrtc at ${{ env.WEBRTC_COMMIT }}, by run ${{ github.run_id }}. For webrtc-sys-build 0.3.21.
+        run: gh release create "$RELEASE" files/* --repo "$GITHUB_REPOSITORY" --draft --title "$RELEASE" --notes "$NOTES"
