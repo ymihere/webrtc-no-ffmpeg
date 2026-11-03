@@ -22,7 +22,7 @@ LiveKit's Android builds already leave these out, so there are none here.
 
 ## Use it
 
-Take the zip for your system from [Releases](../../releases), check it against `SHA256SUMS`, unpack it, and point the SDK at the folder:
+Take the zip for your system from [Releases](../../releases) (a system built again is in a release of its own, with `-2` and so on after the first one's name, so a published zip never changes), check it against `SHA256SUMS`, unpack it, and point the SDK at the folder:
 
 ```sh
 gh attestation verify webrtc-linux-x64-release.zip --repo ymihere/webrtc-no-ffmpeg   # was it built by this workflow?
@@ -45,7 +45,7 @@ The [workflow](.github/workflows/build.yml) runs LiveKit's own build scripts, ch
 1. `rtc_use_h264=false`, and no `ffmpeg_branding`.
 2. WebRTC pinned to an exact commit instead of a branch.
 
-Then [`scripts/pack.py`](scripts/pack.py) looks through the finished library, its licence list and its build file for ffmpeg and OpenH264, and refuses to zip a build that names them. It also drops their header files from the zip. If LiveKit's scripts change so that a change no longer applies, the build stops.
+Then [`scripts/pack.py`](scripts/pack.py) looks through the finished library, its licence list and its build file for ffmpeg and OpenH264, and refuses to zip a build that names them. It also drops their header files from the zip, and refuses a zip that misses any other header of the source. If LiveKit's scripts change so that a change no longer applies, the build stops.
 
 Each zip carries `LICENSE.md`, the licence notices of everything inside it.
 

@@ -20,8 +20,30 @@ def found(path, words):
     return [word.decode() for word in words if word in data]
 
 
+def missing_headers(build):
+    """Every header the recipe copies from the source (each .h and .inc under src/, as its xcopy
+    or cpio does) must be in the zip, except the ones dropped on purpose. A copy that stops
+    halfway (Windows' xcopy at a path too long) otherwise packs a library nothing can build on."""
+    source = build.parent / "src"
+    if not source.is_dir():
+        return [f"no source at {source} to compare the headers with"]
+    dropped = [pathlib.PurePosixPath("third_party", header) for header in HEADERS_TO_DROP]
+    lost = []
+    for header in source.rglob("*"):
+        if header.suffix not in (".h", ".inc") or not header.is_file():
+            continue
+        relative = pathlib.PurePosixPath(header.relative_to(source).as_posix())
+        if any(relative.is_relative_to(folder) for folder in dropped):
+            continue
+        if not (build / "include" / relative).is_file():
+            lost.append(str(relative))
+    if not lost:
+        return []
+    return [f"{len(lost)} headers of src/ are not in include/, for example {', '.join(sorted(lost)[:5])}"]
+
+
 def check(build):
-    faults = []
+    faults = missing_headers(build)
     libraries = [build / "lib" / "libwebrtc.a", build / "lib" / "webrtc.lib"]
     libraries = [library for library in libraries if library.is_file()]
     if len(libraries) != 1:
